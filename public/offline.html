@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Twogether - offline</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center; text-align: center;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: linear-gradient(160deg, #fff1f5, #ffe4ec); color: #18181b;
+      }
+      @media (prefers-color-scheme: dark) { body { background: #0b0b0f; color: #f4f4f5; } p { color: #a1a1aa !important; } }
+      img { width: 88px; height: 88px; border-radius: 22px; box-shadow: 0 10px 30px rgb(244 63 94 / .3); }
+      h1 { font-size: 22px; margin: 20px 0 6px; }
+      p { margin: 0 0 22px; color: #71717a; }
+      button {
+        border: 0; border-radius: 999px; padding: 12px 22px; font: 600 15px inherit; color: white; cursor: pointer;
+        background: linear-gradient(90deg, #f43f5e, #ec4899);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/icon-192.png" alt="" />
+      <h1>You are offline</h1>
+      <p>Your messages will be here as soon as you are back online.</p>
+      <button onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

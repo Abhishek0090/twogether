@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+
+  --color-ink: #18181b;
+  --color-night: #0b0b0f;
+  --color-night-2: #141419;
+  --color-night-3: #1d1d24;
+
+  --animate-pop: pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+  --animate-fade: fade 0.2s ease-out;
+  --animate-slide-up: slide-up 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-float-heart: float-heart var(--dur, 2.6s) ease-out forwards;
+  --animate-flash: flash 1.6s ease-out;
+  --animate-beat: beat 1.2s ease-in-out infinite;
+
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.85);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes float-heart {
+    0% {
+      opacity: 0;
+      transform: translate(0, 0) scale(0.4) rotate(0deg);
+    }
+    12% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: translate(var(--dx, 0px), -85vh) scale(var(--s, 1.2)) rotate(var(--rot, 20deg));
+    }
+  }
+  @keyframes flash {
+    0%,
+    40% {
+      background-color: rgb(244 63 94 / 0.25);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+  @keyframes beat {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    15% {
+      transform: scale(1.18);
+    }
+    30% {
+      transform: scale(1);
+    }
+    45% {
+      transform: scale(1.12);
+    }
+  }
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    @apply bg-zinc-50 text-ink antialiased dark:bg-night dark:text-zinc-100;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-rose-500;
+  }
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* stops iOS zooming into inputs */
+  }
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility h-app {
+  height: 100dvh;
+}
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(161 161 170 / 0.4) transparent;
+}
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility card {
+  @apply rounded-3xl bg-white shadow-sm ring-1 ring-zinc-900/5 dark:bg-night-2 dark:ring-white/5;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-linear-to-r from-rose-500 to-pink-500 text-white shadow-md shadow-rose-500/25 hover:brightness-105;
+}
+@utility btn-soft {
+  @apply btn bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20;
+}
+@utility btn-ghost {
+  @apply btn text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-white/5;
+}
+@utility btn-danger {
+  @apply btn bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20;
+}
+@utility icon-btn {
+  @apply inline-flex size-10 shrink-0 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-900/5 active:scale-95 dark:text-zinc-300 dark:hover:bg-white/10;
+}
+@utility field {
+  @apply w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[15px] outline-none transition placeholder:text-zinc-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-500/10 dark:border-white/10 dark:bg-night-3 dark:placeholder:text-zinc-500;
+}
+@utility label {
+  @apply mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300;
+}
