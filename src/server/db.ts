@@ -1,8 +1,12 @@
 import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
-export const DATA_DIR = resolve(process.env.DATA_DIR ?? join(process.cwd(), "data"));
+const defaultDataDir = process.env.VERCEL
+  ? join(tmpdir(), "twogether")
+  : join(process.cwd(), "data");
+export const DATA_DIR = resolve(process.env.DATA_DIR ?? defaultDataDir);
 export const UPLOAD_DIR = join(DATA_DIR, "uploads");
 
 const SCHEMA = `
@@ -135,7 +139,9 @@ CREATE TABLE IF NOT EXISTS kv (
 function open() {
   mkdirSync(UPLOAD_DIR, { recursive: true });
   const db = new DatabaseSync(join(DATA_DIR, "twogether.db"));
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  db.exec(
+    "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+  );
   db.exec(SCHEMA);
   return db;
 }
@@ -173,9 +179,14 @@ export function tx<T>(fn: () => T): T {
 }
 
 export function kvGet(key: string) {
-  return one<{ value: string }>("SELECT value FROM kv WHERE key = ?", key)?.value;
+  return one<{ value: string }>("SELECT value FROM kv WHERE key = ?", key)
+    ?.value;
 }
 
 export function kvSet(key: string, value: string) {
-  run("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value);
+  run(
+    "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    key,
+    value,
+  );
 }
