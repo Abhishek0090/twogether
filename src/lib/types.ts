@@ -93,6 +93,8 @@ export interface Bootstrap {
   me: Me;
   partner: PublicUser;
   couple: Couple;
+  /** Supabase Realtime channel names: your private one, and the one you share with your partner. */
+  realtime: { userTopic: string; coupleTopic: string };
 }
 
 export interface SpecialDate {
@@ -131,21 +133,15 @@ export type CallSignal =
 export type RefreshTopic = "couple" | "dates" | "bucket" | "question";
 
 export type ServerEvent =
-  | { t: "hello"; partnerOnline: boolean; partnerLastSeen: number | null }
   | { t: "message"; message: Message }
   | { t: "message:update"; message: Message }
   | { t: "message:hidden"; ids: number[] }
   | { t: "receipt"; kind: "delivered" | "read"; readerId: number; upTo: number; at: number }
-  | { t: "typing"; userId: number; state: TypingState }
   | { t: "presence"; userId: number; online: boolean; lastSeen: number | null }
   | { t: "refresh"; what: RefreshTopic }
-  | { t: "call"; data: CallSignal }
-  | { t: "unpaired" }
-  | { t: "pong" };
+  | { t: "unpaired" };
 
-export type ClientEvent =
-  | { t: "typing"; state: TypingState }
-  | { t: "read"; upTo: number }
-  | { t: "visibility"; visible: boolean }
-  | { t: "call"; data: CallSignal }
-  | { t: "ping" };
+/** Sent browser to browser on the shared couple channel. `from` is the sender's user id. */
+export type PeerEvent =
+  | { t: "typing"; from: number; state: TypingState }
+  | { t: "call"; from: number; data: CallSignal };

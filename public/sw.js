@@ -1,8 +1,7 @@
 // Twogether service worker: offline shell, media cache and push notifications.
-const VERSION = "tg-v1";
+const VERSION = "tg-v2";
 const SHELL = `${VERSION}-shell`;
 const STATIC = `${VERSION}-static`;
-const MEDIA = `${VERSION}-media`;
 const PAGES = `${VERSION}-pages`;
 const PRECACHE = ["/offline.html", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/badge-96.png", "/manifest.webmanifest"];
 
@@ -50,11 +49,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(cacheFirst(request, STATIC, 300));
     return;
   }
-  // Photos and voice notes never change once uploaded. Range requests (video seeking) go to the network.
-  if (url.pathname.startsWith("/api/media/") && !request.headers.has("range")) {
-    event.respondWith(cacheFirst(request, MEDIA, 400).catch(() => Response.error()));
-    return;
-  }
+  // /api/media/* redirects to short-lived Supabase Storage links, so the browser's own HTTP cache handles it.
   // Pages: network first, then the last copy we saw, then the offline page.
   if (request.mode === "navigate") {
     event.respondWith(

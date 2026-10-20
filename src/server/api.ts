@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { SESSION_COOKIE, SESSION_MAX_AGE, userFromToken } from "./auth";
+import { one, run } from "./db";
 import { getPartner } from "./users";
 
 export class HttpError extends Error {
@@ -47,7 +48,7 @@ export async function requireUser() {
 
 export async function requireCouple() {
   const user = await requireUser();
-  const partner = user.couple_id ? getPartner(user) : undefined;
+  const partner = user.couple_id ? await getPartner(user) : undefined;
   if (!user.couple_id || !partner) throw new HttpError(409, "You are not connected with your partner yet.");
   return { user, partner, coupleId: user.couple_id };
 }
@@ -86,18 +87,24 @@ export async function setSessionCookie(req: Request, token: string) {
   });
 }
 
-const attempts = new Map<string, { count: number; resetAt: number }>();
-
-/** Simple fixed-window limiter, e.g. for login attempts. */
-export function rateLimit(key: string, limit: number, windowMs: number) {
+/**
+ * Fixed-window limiter, e.g. for login attempts. Stored in the database because serverless
+ * functions do not share memory between requests.
+ */
+export async function rateLimit(key: string, limit: number, windowMs: number) {
   const now = Date.now();
-  const entry = attempts.get(key);
-  if (!entry || entry.resetAt < now) {
-    attempts.set(key, { count: 1, resetAt: now + windowMs });
-    return;
-  }
-  entry.count++;
-  if (entry.count > limit) throw new HttpError(429, "Too many attempts. Please wait a few minutes.");
+  await run(
+    `INSERT INTO rate_limits (key, count, reset_at) VALUES (?, 1, ?)
+     ON CONFLICT (key) DO UPDATE SET
+       count = CASE WHEN rate_limits.reset_at < ? THEN 1 ELSE rate_limits.count + 1 END,
+       reset_at = CASE WHEN rate_limits.reset_at < ? THEN excluded.reset_at ELSE rate_limits.reset_at END`,
+    key,
+    now + windowMs,
+    now,
+    now,
+  );
+  const row = await one<{ count: number }>("SELECT count FROM rate_limits WHERE key = ?", key);
+  if (row && row.count > limit) throw new HttpError(429, "Too many attempts. Please wait a few minutes.");
 }
 
 export function clientIp(req: Request) {

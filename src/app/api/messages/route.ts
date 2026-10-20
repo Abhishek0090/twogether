@@ -1,6 +1,6 @@
 import type { MessageMeta, MessageType, NudgeKind } from "@/lib/types";
 import { handler, HttpError, readJson, requireCouple } from "@/server/api";
-import { all, one, run } from "@/server/db";
+import { all, insert, one } from "@/server/db";
 import {
   getMessageRow,
   hydrate,
@@ -13,7 +13,6 @@ import {
   type MediaRow,
   type MessageRow,
 } from "@/server/messages";
-import { isOnline, sendToUser } from "@/server/realtime";
 
 const MEDIA_KIND: Partial<Record<MessageType, (mime: string) => boolean>> = {
   image: (m) => m.startsWith("image/"),
@@ -30,7 +29,7 @@ export const GET = handler(async (req) => {
   const q = url.searchParams.get("q")?.trim();
   const kind = url.searchParams.get("kind");
 
-  if (q) return Response.json({ messages: hydrate(searchMessages(coupleId, user.id, q.slice(0, 100)), user.id) });
+  if (q) return Response.json({ messages: await hydrate(await searchMessages(coupleId, user.id, q.slice(0, 100)), user.id) });
 
   if (kind) {
     const where: Record<string, string> = {
@@ -41,26 +40,26 @@ export const GET = handler(async (req) => {
     };
     if (!where[kind]) throw new HttpError(400, "Unknown kind.");
     const params = kind === "starred" ? [user.id] : [];
-    const rows = all<MessageRow>(
+    const rows = await all<MessageRow>(
       `SELECT * FROM messages m WHERE m.couple_id = ? AND m.deleted_at IS NULL AND ${where[kind]}
          AND NOT EXISTS (SELECT 1 FROM message_hidden h WHERE h.message_id = m.id AND h.user_id = ?)
          AND m.id < ? ORDER BY m.id DESC LIMIT ?`,
       coupleId,
       ...params,
       user.id,
-      num("before") ?? Number.MAX_SAFE_INTEGER,
+      num("before") ?? 2147483647,
       limit + 1,
     );
-    return Response.json({ messages: hydrate(rows.slice(0, limit), user.id), hasMore: rows.length > limit });
+    return Response.json({ messages: await hydrate(rows.slice(0, limit), user.id), hasMore: rows.length > limit });
   }
 
   const around = num("around");
   if (around) {
-    const older = listMessages(coupleId, user.id, { before: around + 1, limit: 30 });
-    const newer = listMessages(coupleId, user.id, { after: around, limit: 30 });
-    const latest = one<{ id: number }>("SELECT MAX(id) AS id FROM messages WHERE couple_id = ?", coupleId)?.id ?? 0;
+    const older = await listMessages(coupleId, user.id, { before: around + 1, limit: 30 });
+    const newer = await listMessages(coupleId, user.id, { after: around, limit: 30 });
+    const latest = (await one<{ id: number }>("SELECT MAX(id) AS id FROM messages WHERE couple_id = ?", coupleId))?.id ?? 0;
     return Response.json({
-      messages: hydrate([...older, ...newer], user.id),
+      messages: await hydrate([...older, ...newer], user.id),
       hasMore: older.length === 30,
       hasNewer: newer.length > 0 && newer[newer.length - 1].id < latest,
     });
@@ -68,16 +67,16 @@ export const GET = handler(async (req) => {
 
   const after = num("after");
   if (after != null) {
-    const rows = listMessages(coupleId, user.id, { after, limit: 200 });
-    return Response.json({ messages: hydrate(rows, user.id), unread: unreadCount(coupleId, user.id) });
+    const rows = await listMessages(coupleId, user.id, { after, limit: 200 });
+    return Response.json({ messages: await hydrate(rows, user.id), unread: await unreadCount(coupleId, user.id) });
   }
 
-  const rows = listMessages(coupleId, user.id, { before: num("before"), limit: limit + 1 });
+  const rows = await listMessages(coupleId, user.id, { before: num("before"), limit: limit + 1 });
   const hasMore = rows.length > limit;
   return Response.json({
-    messages: hydrate(hasMore ? rows.slice(1) : rows, user.id),
+    messages: await hydrate(hasMore ? rows.slice(1) : rows, user.id),
     hasMore,
-    unread: unreadCount(coupleId, user.id),
+    unread: await unreadCount(coupleId, user.id),
   });
 });
 
@@ -115,8 +114,8 @@ export const POST = handler(async (req) => {
   const clientId = typeof b.clientId === "string" ? b.clientId.slice(0, 64) : null;
 
   if (clientId) {
-    const existing = one<MessageRow>("SELECT * FROM messages WHERE sender_id = ? AND client_id = ?", user.id, clientId);
-    if (existing) return Response.json({ message: hydrate([existing], user.id)[0] });
+    const existing = await one<MessageRow>("SELECT * FROM messages WHERE sender_id = ? AND client_id = ?", user.id, clientId);
+    if (existing) return Response.json({ message: (await hydrate([existing], user.id))[0] });
   }
 
   let body: string | null = typeof b.body === "string" ? b.body.trim() : null;
@@ -131,7 +130,7 @@ export const POST = handler(async (req) => {
   } else if (type === "call") {
     body = null;
   } else if (MEDIA_KIND[type]) {
-    const media = one<MediaRow>("SELECT * FROM media WHERE id = ? AND uploader_id = ?", Number(b.mediaId), user.id);
+    const media = await one<MediaRow>("SELECT * FROM media WHERE id = ? AND uploader_id = ?", Number(b.mediaId), user.id);
     if (!media || !MEDIA_KIND[type]!(media.mime)) throw new HttpError(400, "Attachment is missing. Try again.");
     mediaId = media.id;
     if (type === "audio" || type === "file") body = null;
@@ -143,16 +142,17 @@ export const POST = handler(async (req) => {
 
   let replyTo: number | null = null;
   if (b.replyTo) {
-    const target = one<{ id: number }>("SELECT id FROM messages WHERE id = ? AND couple_id = ?", Number(b.replyTo), coupleId);
+    const target = await one<{ id: number }>("SELECT id FROM messages WHERE id = ? AND couple_id = ?", Number(b.replyTo), coupleId);
     replyTo = target?.id ?? null;
   }
   const viewOnce = (type === "image" || type === "video") && b.viewOnce ? 1 : 0;
   const meta = cleanMeta(type, b.meta);
   const now = Date.now();
 
-  const { id } = run(
-    `INSERT INTO messages (couple_id, sender_id, client_id, type, body, media_id, meta, reply_to, view_once, created_at, delivered_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  // delivered_at is set when the partner's browser confirms it received the message (POST /api/messages/receipts).
+  const id = await insert(
+    `INSERT INTO messages (couple_id, sender_id, client_id, type, body, media_id, meta, reply_to, view_once, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     coupleId,
     user.id,
     clientId,
@@ -163,11 +163,9 @@ export const POST = handler(async (req) => {
     replyTo,
     viewOnce,
     now,
-    isOnline(partner.id) ? now : null,
   );
-  const row = getMessageRow(id)!;
-  sendToUser(partner.id, { t: "typing", userId: user.id, state: null });
-  publishMessage("message", row, [user.id, partner.id]);
+  const row = (await getMessageRow(id))!;
+  await publishMessage("message", row, [user.id, partner.id]);
   notifyPartner(user, row);
-  return Response.json({ message: hydrate([row], user.id)[0] });
+  return Response.json({ message: (await hydrate([row], user.id))[0] });
 });

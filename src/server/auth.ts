@@ -21,21 +21,21 @@ export function verifyPassword(password: string, stored: string) {
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
-export function createSession(userId: number) {
+export async function createSession(userId: number) {
   const token = randomBytes(32).toString("base64url");
   const now = Date.now();
-  run(
+  await run(
     "INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
     sha256(token),
     userId,
     now + SESSION_MAX_AGE * 1000,
     now,
   );
-  run("DELETE FROM sessions WHERE expires_at < ?", now);
+  await run("DELETE FROM sessions WHERE expires_at < ?", now);
   return token;
 }
 
-export function userFromToken(token: string | undefined | null): UserRow | undefined {
+export async function userFromToken(token: string | undefined | null): Promise<UserRow | undefined> {
   if (!token) return undefined;
   return one<UserRow>(
     `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
@@ -45,15 +45,6 @@ export function userFromToken(token: string | undefined | null): UserRow | undef
   );
 }
 
-export function deleteSession(token: string) {
-  run("DELETE FROM sessions WHERE token_hash = ?", sha256(token));
-}
-
-export function readCookie(header: string | undefined, name: string) {
-  if (!header) return undefined;
-  for (const part of header.split(";")) {
-    const [k, ...v] = part.trim().split("=");
-    if (k === name) return decodeURIComponent(v.join("="));
-  }
-  return undefined;
+export async function deleteSession(token: string) {
+  await run("DELETE FROM sessions WHERE token_hash = ?", sha256(token));
 }

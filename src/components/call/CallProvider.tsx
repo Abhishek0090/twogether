@@ -83,7 +83,11 @@ async function getMedia(video: boolean, facingMode: "user" | "environment" = "us
 }
 
 export function CallProvider({ children }: { children: ReactNode }) {
-  const { subscribe, sendSignal, send, toast, partnerName } = useApp();
+  const { subscribe, sendSignal, send, toast, partnerName, partnerOnline, me } = useApp();
+  const partnerOnlineRef = useRef(partnerOnline);
+  useEffect(() => {
+    partnerOnlineRef.current = partnerOnline;
+  }, [partnerOnline]);
   const [call, setCall] = useState<CallState>(IDLE);
   const callRef = useRef(call);
   const pc = useRef<RTCPeerConnection | null>(null);
@@ -185,6 +189,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
         return;
       }
       update({ local });
+      // Calls only ring while the partner has the app open (Realtime presence). Otherwise log a missed call,
+      // which also sends them a push notification.
+      if (!partnerOnlineRef.current) {
+        finish(`${partnerName} is offline`, "missed");
+        return;
+      }
       const peer = await createPeer(callId, local);
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
@@ -202,7 +212,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         }, RING_TIMEOUT_MS),
       );
     },
-    [createPeer, finish, ring, sendSignal, toast, update],
+    [createPeer, finish, partnerName, ring, sendSignal, toast, update],
   );
 
   const accept = useCallback(async () => {
@@ -282,6 +292,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (e.t !== "call") return;
         const data: CallSignal = e.data;
         const c = callRef.current;
+        if (e.from === me.id) {
+          // One of our own other devices answered or declined: stop ringing on this one.
+          if ((data.kind === "answer" || data.kind === "reject") && c.phase === "incoming" && data.callId === c.callId) {
+            finish("Answered on another device");
+          }
+          return;
+        }
         if (data.kind === "offer") {
           if (c.phase !== "idle" && c.phase !== "ended") {
             sendSignal({ kind: "busy", callId: data.callId });
@@ -343,7 +360,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
             break;
         }
       }),
-    [finish, flushIce, partnerName, ring, sendSignal, subscribe, update],
+    [finish, flushIce, me.id, partnerName, ring, sendSignal, subscribe, update],
   );
 
   // Hang up cleanly if the tab closes mid-call.

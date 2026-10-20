@@ -5,7 +5,7 @@ import { listDates } from "@/server/together";
 
 export const GET = handler(async () => {
   const { coupleId } = await requireCouple();
-  return Response.json({ dates: listDates(coupleId) });
+  return Response.json({ dates: await listDates(coupleId) });
 });
 
 export const POST = handler(async (req) => {
@@ -15,7 +15,7 @@ export const POST = handler(async (req) => {
   const date = String(b.date ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new HttpError(400, "Pick a date.");
   const emoji = b.emoji ? text(b.emoji, "Emoji", { max: 16 }) : "💗";
-  run(
+  await run(
     "INSERT INTO special_dates (couple_id, title, date, emoji, yearly, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     coupleId,
     title,
@@ -25,6 +25,6 @@ export const POST = handler(async (req) => {
     user.id,
     Date.now(),
   );
-  sendToUsers([user.id, partner.id], { t: "refresh", what: "dates" });
-  return Response.json({ dates: listDates(coupleId) });
+  await sendToUsers([user.id, partner.id], { t: "refresh", what: "dates" });
+  return Response.json({ dates: await listDates(coupleId) });
 });

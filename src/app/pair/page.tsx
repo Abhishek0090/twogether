@@ -10,7 +10,7 @@ export default async function PairPage({ searchParams }: { searchParams: Promise
   const { code } = await searchParams;
   const user = await currentUser();
   if (!user) redirect(`/register?next=${encodeURIComponent(code ? `/pair?code=${code}` : "/pair")}`);
-  if (getPartner(user)) redirect("/");
-  const couple = user.couple_id ? getCouple(user.couple_id) : undefined;
+  if (await getPartner(user)) redirect("/");
+  const couple = user.couple_id ? await getCouple(user.couple_id) : undefined;
   return <PairView name={user.name} existingCode={couple?.invite_code ?? null} joinCode={code?.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) ?? ""} />;
 }

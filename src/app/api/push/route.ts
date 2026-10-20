@@ -3,7 +3,7 @@ import { pushToUser, removeSubscription, saveSubscription, vapidPublicKey } from
 
 export const GET = handler(async () => {
   await requireUser();
-  return Response.json({ publicKey: vapidPublicKey() });
+  return Response.json({ publicKey: await vapidPublicKey() });
 });
 
 interface SubscriptionBody {
@@ -17,14 +17,14 @@ export const POST = handler(async (req) => {
   if (typeof sub.endpoint !== "string" || !sub.endpoint.startsWith("https://") || !sub.keys?.p256dh || !sub.keys?.auth) {
     throw new HttpError(400, "Invalid push subscription.");
   }
-  saveSubscription(user.id, sub as SubscriptionBody);
+  await saveSubscription(user.id, sub as SubscriptionBody);
   return Response.json({ ok: true });
 });
 
 export const DELETE = handler(async (req) => {
   const user = await requireUser();
   const { endpoint } = await readJson<{ endpoint: string }>(req);
-  if (typeof endpoint === "string") removeSubscription(user.id, endpoint);
+  if (typeof endpoint === "string") await removeSubscription(user.id, endpoint);
   return Response.json({ ok: true });
 });
 

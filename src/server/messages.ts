@@ -1,7 +1,8 @@
 import type { MediaInfo, Message, MessageMeta, MessageType, NudgeKind, ReplyPreview } from "@/lib/types";
+import { after } from "next/server";
 import { all, one } from "./db";
 import { pushToUser } from "./push";
-import { isActive, sendToUser } from "./realtime";
+import { isActive, sendEach } from "./realtime";
 import { getPartner, type UserRow } from "./users";
 
 export interface MessageRow {
@@ -42,13 +43,13 @@ function toMediaInfo(m: MediaRow): MediaInfo {
 }
 
 /** Turns rows into API messages, with reactions, stars, replies and media for one viewer. */
-export function hydrate(rows: MessageRow[], viewerId: number): Message[] {
+export async function hydrate(rows: MessageRow[], viewerId: number): Promise<Message[]> {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const replyIds = [...new Set(rows.map((r) => r.reply_to).filter((v): v is number => v != null))];
 
   const replies = new Map(
-    (replyIds.length ? all<MessageRow>(`SELECT * FROM messages WHERE id IN (${placeholders(replyIds.length)})`, ...replyIds) : []).map(
+    (replyIds.length ? await all<MessageRow>(`SELECT * FROM messages WHERE id IN (${placeholders(replyIds.length)})`, ...replyIds) : []).map(
       (r) => [r.id, r],
     ),
   );
@@ -56,20 +57,20 @@ export function hydrate(rows: MessageRow[], viewerId: number): Message[] {
     ...new Set([...rows, ...replies.values()].map((r) => r.media_id).filter((v): v is number => v != null)),
   ];
   const media = new Map(
-    (mediaIds.length ? all<MediaRow>(`SELECT * FROM media WHERE id IN (${placeholders(mediaIds.length)})`, ...mediaIds) : []).map(
+    (mediaIds.length ? await all<MediaRow>(`SELECT * FROM media WHERE id IN (${placeholders(mediaIds.length)})`, ...mediaIds) : []).map(
       (m) => [m.id, m],
     ),
   );
-  const reactions = all<{ message_id: number; user_id: number; emoji: string }>(
+  const reactions = await all<{ message_id: number; user_id: number; emoji: string }>(
     `SELECT message_id, user_id, emoji FROM reactions WHERE message_id IN (${placeholders(ids.length)}) ORDER BY created_at`,
     ...ids,
   );
   const starred = new Set(
-    all<{ message_id: number }>(
+    (await all<{ message_id: number }>(
       `SELECT message_id FROM stars WHERE user_id = ? AND message_id IN (${placeholders(ids.length)})`,
       viewerId,
       ...ids,
-    ).map((s) => s.message_id),
+    )).map((s) => s.message_id),
   );
 
   return rows.map((r) => {
@@ -120,7 +121,7 @@ export function getMessageRow(id: number) {
 
 const VISIBLE = "NOT EXISTS (SELECT 1 FROM message_hidden h WHERE h.message_id = m.id AND h.user_id = ?)";
 
-export function listMessages(coupleId: number, viewerId: number, opts: { before?: number; after?: number; limit: number }) {
+export async function listMessages(coupleId: number, viewerId: number, opts: { before?: number; after?: number; limit: number }) {
   if (opts.after != null) {
     return all<MessageRow>(
       `SELECT * FROM messages m WHERE couple_id = ? AND id > ? AND ${VISIBLE} ORDER BY id ASC LIMIT ?`,
@@ -130,10 +131,10 @@ export function listMessages(coupleId: number, viewerId: number, opts: { before?
       opts.limit,
     );
   }
-  const rows = all<MessageRow>(
+  const rows = await all<MessageRow>(
     `SELECT * FROM messages m WHERE couple_id = ? AND id < ? AND ${VISIBLE} ORDER BY id DESC LIMIT ?`,
     coupleId,
-    opts.before ?? Number.MAX_SAFE_INTEGER,
+    opts.before ?? 2147483647,
     viewerId,
     opts.limit,
   );
@@ -144,7 +145,7 @@ export function searchMessages(coupleId: number, viewerId: number, q: string) {
   const like = `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
   return all<MessageRow>(
     `SELECT * FROM messages m WHERE couple_id = ? AND deleted_at IS NULL AND type IN ('text', 'file')
-       AND (body LIKE ? ESCAPE '\\' OR media_id IN (SELECT id FROM media WHERE name LIKE ? ESCAPE '\\'))
+       AND (body ILIKE ? ESCAPE '\\' OR media_id IN (SELECT id FROM media WHERE name ILIKE ? ESCAPE '\\'))
        AND ${VISIBLE} ORDER BY id DESC LIMIT 50`,
     coupleId,
     like,
@@ -153,24 +154,23 @@ export function searchMessages(coupleId: number, viewerId: number, q: string) {
   );
 }
 
-export function unreadCount(coupleId: number, viewerId: number) {
+export async function unreadCount(coupleId: number, viewerId: number) {
   return (
-    one<{ n: number }>(
+    (await one<{ n: number }>(
       `SELECT COUNT(*) AS n FROM messages m WHERE couple_id = ? AND sender_id != ? AND read_at IS NULL
          AND type != 'system' AND ${VISIBLE}`,
       coupleId,
       viewerId,
       viewerId,
-    )?.n ?? 0
+    ))?.n ?? 0
   );
 }
 
 /** Sends the current version of a message to both partners (each gets their own view of stars). */
-export function publishMessage(kind: "message" | "message:update", row: MessageRow, userIds: number[]) {
-  for (const userId of userIds) {
-    const [message] = hydrate([row], userId);
-    sendToUser(userId, { t: kind, message });
-  }
+export async function publishMessage(kind: "message" | "message:update", row: MessageRow, userIds: number[]) {
+  const items = [];
+  for (const userId of userIds) items.push({ userId, event: { t: kind, message: (await hydrate([row], userId))[0] } as const });
+  await sendEach(items);
 }
 
 export const NUDGES: Record<NudgeKind, { emoji: string; label: string }> = {
@@ -205,17 +205,22 @@ export function previewText(row: Pick<MessageRow, "type" | "body" | "meta" | "vi
   }
 }
 
-/** Pushes a notification to the partner when they do not have the app on screen. */
+/**
+ * Pushes a notification to the partner when they do not have the app on screen.
+ * Runs after the response is sent (`after`), so the sender does not wait for the push service.
+ */
 export function notifyPartner(sender: UserRow, row: MessageRow) {
-  const partner = getPartner(sender);
-  if (!partner || isActive(partner.id)) return;
-  if (row.type === "call" && row.meta && (JSON.parse(row.meta) as MessageMeta).status !== "missed") return;
-  const media = row.media_id ? one<MediaRow>("SELECT * FROM media WHERE id = ?", row.media_id) : undefined;
-  void pushToUser(partner.id, {
-    title: partner.partner_nickname || sender.name,
-    body: previewText(row, media),
-    tag: row.type === "nudge" ? "nudge" : "chat",
-    url: "/",
-    icon: sender.avatar_media_id ? `/api/media/${sender.avatar_media_id}` : undefined,
+  after(async () => {
+    const partner = await getPartner(sender);
+    if (!partner || (await isActive(partner.id))) return;
+    if (row.type === "call" && row.meta && (JSON.parse(row.meta) as MessageMeta).status !== "missed") return;
+    const media = row.media_id ? await one<MediaRow>("SELECT * FROM media WHERE id = ?", row.media_id) : undefined;
+    await pushToUser(partner.id, {
+      title: partner.partner_nickname || sender.name,
+      body: previewText(row, media),
+      tag: row.type === "nudge" ? "nudge" : "chat",
+      url: "/",
+      icon: sender.avatar_media_id ? `/api/media/${sender.avatar_media_id}` : undefined,
+    });
   });
 }

@@ -1,18 +1,20 @@
 "use client";
 
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, prepareImage, probeVideo, uploadFile } from "@/lib/client/api";
+import { supabaseBrowser } from "@/lib/client/supabase";
 import { playIncoming, playNudge, playSent } from "@/lib/client/sound";
 import type {
   Bootstrap,
   CallSignal,
-  ClientEvent,
   Couple,
   Me,
   Message,
   MessageMeta,
   MessageType,
   NudgeKind,
+  PeerEvent,
   PublicUser,
   ServerEvent,
   TypingState,
@@ -67,7 +69,7 @@ interface AppContextValue {
   setTyping(state: TypingState): void;
   setChatActive(active: boolean): void;
   sendSignal(data: CallSignal): boolean;
-  subscribe(fn: (e: ServerEvent | LocalEvent) => void): () => void;
+  subscribe(fn: (e: AppEvent) => void): () => void;
   refreshCouple(): Promise<void>;
   patchMe(me: Me): void;
   toast(t: Omit<Toast, "id">): void;
@@ -76,6 +78,14 @@ interface AppContextValue {
 
 /** Events raised inside the app, delivered through the same subscribe() as server events. */
 export type LocalEvent = { t: "local:nudge"; kind: NudgeKind; fromMe: boolean };
+
+/** Everything subscribe() can deliver: server events, partner-to-partner events, and local ones. */
+export type AppEvent = ServerEvent | PeerEvent | LocalEvent;
+
+/** Realtime broadcast event names (see src/server/realtime.ts). */
+const USER_EVENT = "event";
+const PEER_EVENT = "peer";
+const HEARTBEAT_MS = 25_000;
 
 const AppContext = createContext<AppContextValue | null>(null);
 
@@ -123,8 +133,9 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const meId = initial.me.id;
-  const wsRef = useRef<WebSocket | null>(null);
-  const listeners = useRef(new Set<(e: ServerEvent | LocalEvent) => void>());
+  const peerChannel = useRef<RealtimeChannel | null>(null);
+  const peerReady = useRef(false);
+  const listeners = useRef(new Set<(e: AppEvent) => void>());
   const chatActive = useRef(false);
   const messagesRef = useRef(messages);
   const hasNewerRef = useRef(hasNewer);
@@ -142,7 +153,7 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
 
   const partnerName = boot.me.partnerNickname || boot.partner.name;
 
-  const emit = useCallback((e: ServerEvent | LocalEvent) => {
+  const emit = useCallback((e: AppEvent) => {
     for (const fn of listeners.current) fn(e);
   }, []);
 
@@ -154,12 +165,22 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
 
   const dismissToast = useCallback((id: number) => setToasts((list) => list.filter((x) => x.id !== id)), []);
 
-  const wsSend = useCallback((event: ClientEvent) => {
-    const ws = wsRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify(event));
+  /** Sends an event straight to the partner's browsers over the shared couple channel. */
+  const sendPeer = useCallback((event: PeerEvent) => {
+    const ch = peerChannel.current;
+    if (!ch || !peerReady.current) return false;
+    void ch.send({ type: "broadcast", event: PEER_EVENT, payload: event });
     return true;
   }, []);
+
+  /** Tells the server we received the partner's messages (their second grey tick). */
+  const ackDelivered = useCallback(
+    (list: Message[]) => {
+      const latest = list.filter((m) => m.id > 0 && m.senderId !== meId && !m.deliveredAt).at(-1);
+      if (latest) void api("/api/messages/receipts", { json: { kind: "delivered", upTo: latest.id } }).catch(() => {});
+    },
+    [meId],
+  );
 
   const isVisible = () => typeof document !== "undefined" && document.visibilityState === "visible";
 
@@ -169,10 +190,10 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
     const needsRead = messagesRef.current.some((m) => m.id > 0 && m.senderId !== meId && !m.readAt);
     setUnread(0);
     if (!needsRead) return;
-    wsSend({ t: "read", upTo: latest.id });
+    void api("/api/messages/receipts", { json: { kind: "read", upTo: latest.id } }).catch(() => {});
     const at = Date.now();
     setMessages((list) => list.map((m) => (m.senderId !== meId && !m.readAt && m.id > 0 ? { ...m, readAt: at } : m)));
-  }, [meId, wsSend]);
+  }, [meId]);
 
   const markReadRef = useRef(markRead);
   useEffect(() => {
@@ -188,10 +209,6 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
   const onEvent = useCallback(
     (e: ServerEvent) => {
       switch (e.t) {
-        case "hello":
-          setPartnerOnline(e.partnerOnline);
-          setPartnerLastSeen(e.partnerLastSeen);
-          break;
         case "message": {
           const m = e.message;
           if (hasNewerRef.current && m.senderId !== meId) {
@@ -211,7 +228,10 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
             }
             if (chatActive.current && isVisible()) {
               setTimeout(markRead, 300);
-            } else if (m.type !== "system") {
+            } else {
+              ackDelivered([m]);
+            }
+            if ((!chatActive.current || !isVisible()) && m.type !== "system") {
               setUnread((n) => n + 1);
               if (m.type !== "nudge" && !chatActive.current) {
                 toast({ title: partnerName, body: previewOf(m), href: "/" });
@@ -246,11 +266,6 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
             );
           }
           break;
-        case "typing":
-          setPartnerTyping(e.state);
-          clearTimeout(typingTimer.current);
-          if (e.state) typingTimer.current = setTimeout(() => setPartnerTyping(null), 7000);
-          break;
         case "presence":
           setPartnerOnline(e.online);
           if (e.lastSeen) setPartnerLastSeen(e.lastSeen);
@@ -264,22 +279,41 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
       }
       emit(e);
     },
-    [emit, markRead, meId, partnerName, refreshCouple, toast],
+    [ackDelivered, emit, markRead, meId, partnerName, refreshCouple, toast],
+  );
+
+  /** Events from the partner's browser (or our own other devices) on the couple channel. */
+  const onPeer = useCallback(
+    (e: PeerEvent) => {
+      if (e.t === "typing" && e.from !== meId) {
+        setPartnerTyping(e.state);
+        clearTimeout(typingTimer.current);
+        if (e.state) typingTimer.current = setTimeout(() => setPartnerTyping(null), 7000);
+      }
+      emit(e);
+    },
+    [emit, meId],
   );
 
   const onEventRef = useRef(onEvent);
+  const onPeerRef = useRef(onPeer);
   useEffect(() => {
     onEventRef.current = onEvent;
-  }, [onEvent]);
+    onPeerRef.current = onPeer;
+  }, [onEvent, onPeer]);
 
   // ---- initial load + sync after reconnect ---------------------------------------------------
-  const applyLatest = useCallback((data: { messages: Message[]; hasMore: boolean; unread: number }) => {
-    setMessages((list) => merge(list.filter((m) => m.id < 0), data.messages));
-    setHasMore(data.hasMore);
-    setHasNewer(false);
-    setUnread(data.unread);
-    setLoaded(true);
-  }, []);
+  const applyLatest = useCallback(
+    (data: { messages: Message[]; hasMore: boolean; unread: number }) => {
+      setMessages((list) => merge(list.filter((m) => m.id < 0), data.messages));
+      setHasMore(data.hasMore);
+      setHasNewer(false);
+      setUnread(data.unread);
+      setLoaded(true);
+      ackDelivered(data.messages);
+    },
+    [ackDelivered],
+  );
 
   const loadLatest = useCallback(async () => applyLatest(await fetchLatest()), [applyLatest]);
 
@@ -293,7 +327,8 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
     ]);
     setMessages((list) => merge(list, [...latest.messages, ...newer.messages]));
     setUnread(newer.unread);
-  }, [loadLatest]);
+    ackDelivered(newer.messages);
+  }, [ackDelivered, loadLatest]);
 
   useEffect(() => {
     fetchLatest()
@@ -301,76 +336,102 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
       .catch(() => setLoaded(true));
   }, [applyLatest]);
 
-  // ---- WebSocket -----------------------------------------------------------------------------
+  // ---- Realtime (Supabase) ------------------------------------------------------------------
+  // Two channels: our private one for server events, and the couple one for typing, calls and presence.
+  const partnerId = initial.partner.id;
+  const { userTopic, coupleTopic } = initial.realtime;
   useEffect(() => {
-    let closed = false;
-    let retry = 0;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let ping: ReturnType<typeof setInterval> | undefined;
-    let firstOpen = true;
+    const sb = supabaseBrowser();
+    let firstJoin = true;
+    const tabKey = `${meId}:${crypto.randomUUID()}`;
 
-    const connect = () => {
-      if (closed) return;
-      clearTimeout(reconnectTimer);
-      setStatus("connecting");
-      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-      wsRef.current = ws;
-      ws.onopen = () => {
-        retry = 0;
-        setStatus("online");
-        ws.send(JSON.stringify({ t: "visibility", visible: isVisible() }));
-        ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ t: "ping" })), 25_000);
-        if (!firstOpen) void sync().catch(() => {});
-        firstOpen = false;
-      };
-      ws.onmessage = (msg) => {
-        try {
-          onEventRef.current(JSON.parse(String(msg.data)) as ServerEvent);
-        } catch (err) {
-          console.error(err);
-        }
-      };
-      ws.onclose = (ev) => {
-        clearInterval(ping);
-        if (wsRef.current === ws) wsRef.current = null;
-        setStatus("offline");
-        setPartnerTyping(null);
-        if (closed) return;
-        if (ev.code === 4401) {
-          window.location.href = "/login";
-          return;
-        }
-        reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 15_000));
-      };
-    };
-
-    connect();
-
-    const wake = () => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        retry = 0;
-        connect();
+    const mine = sb.channel(userTopic);
+    mine.on("broadcast", { event: USER_EVENT }, ({ payload }) => {
+      try {
+        onEventRef.current(payload as ServerEvent);
+      } catch (err) {
+        console.error(err);
       }
+    });
+    mine.subscribe((state) => {
+      if (state === "SUBSCRIBED") {
+        setStatus("online");
+        // Catch up on anything sent while we were disconnected.
+        if (!firstJoin) void sync().catch(() => {});
+        firstJoin = false;
+      } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") {
+        setStatus("connecting"); // supabase-js retries by itself
+      } else if (state === "CLOSED") {
+        setStatus("offline");
+      }
+    });
+
+    const shared = sb.channel(coupleTopic, { config: { broadcast: { self: false }, presence: { key: tabKey } } });
+    peerChannel.current = shared;
+    shared.on("broadcast", { event: PEER_EVENT }, ({ payload }) => onPeerRef.current(payload as PeerEvent));
+    let wasOnline = false;
+    shared.on("presence", { event: "sync" }, () => {
+      const online = Object.values(shared.presenceState<{ userId: number }>())
+        .flat()
+        .some((p) => p.userId === partnerId);
+      if (online === wasOnline) return;
+      wasOnline = online;
+      setPartnerOnline(online);
+      if (!online) {
+        const at = Date.now();
+        setPartnerLastSeen(at);
+        setPartnerTyping(null);
+        emit({ t: "presence", userId: partnerId, online: false, lastSeen: at });
+      } else {
+        emit({ t: "presence", userId: partnerId, online: true, lastSeen: null });
+      }
+    });
+    shared.subscribe((state) => {
+      peerReady.current = state === "SUBSCRIBED";
+      if (state === "SUBSCRIBED") void shared.track({ userId: meId, at: Date.now() });
+    });
+
+    return () => {
+      peerReady.current = false;
+      peerChannel.current = null;
+      void sb.removeChannel(mine);
+      void sb.removeChannel(shared);
+    };
+  }, [coupleTopic, emit, meId, partnerId, sync, userTopic]);
+
+  // Fallback: if Realtime cannot connect (blocked network, paused project), fetch new messages every 10 s.
+  useEffect(() => {
+    if (status === "online") return;
+    const timer = setInterval(() => {
+      if (isVisible()) void sync().catch(() => {});
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [status, sync]);
+
+  // Heartbeat while on screen: lets the server skip push notifications you would see anyway,
+  // and keeps "last seen" fresh. When hidden, tell the server at once (sendBeacon survives closing the tab).
+  useEffect(() => {
+    const beat = () => {
+      if (isVisible()) void api("/api/presence", { json: { visible: true } }).catch(() => {});
     };
     const onVisibility = () => {
-      wsSend({ t: "visibility", visible: isVisible() });
       if (isVisible()) {
-        wake();
+        beat();
         if (chatActive.current) markReadRef.current();
+      } else {
+        navigator.sendBeacon?.("/api/presence", new Blob([JSON.stringify({ visible: false })], { type: "application/json" }));
       }
     };
-    window.addEventListener("online", wake);
+    beat();
+    const timer = setInterval(beat, HEARTBEAT_MS);
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onVisibility);
     return () => {
-      closed = true;
-      clearTimeout(reconnectTimer);
-      clearInterval(ping);
-      window.removeEventListener("online", wake);
+      clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
-      wsRef.current?.close();
+      window.removeEventListener("pagehide", onVisibility);
     };
-  }, [sync, wsSend]);
+  }, []);
 
   // ---- unread badge in the tab title and on the installed app icon ---------------------------
   useEffect(() => {
@@ -543,9 +604,9 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
       // Re-send "typing" at most every 3 s; send changes straight away.
       if (state === lastTyping.current.state && (state === null || now - lastTyping.current.at < 3000)) return;
       lastTyping.current = { state, at: now };
-      wsSend({ t: "typing", state });
+      sendPeer({ t: "typing", from: meId, state });
     },
-    [wsSend],
+    [meId, sendPeer],
   );
 
   const setChatActive = useCallback(
@@ -556,9 +617,9 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
     [markRead],
   );
 
-  const sendSignal = useCallback((data: CallSignal) => wsSend({ t: "call", data }), [wsSend]);
+  const sendSignal = useCallback((data: CallSignal) => sendPeer({ t: "call", from: meId, data }), [meId, sendPeer]);
 
-  const subscribe = useCallback((fn: (e: ServerEvent | LocalEvent) => void) => {
+  const subscribe = useCallback((fn: (e: AppEvent) => void) => {
     listeners.current.add(fn);
     return () => void listeners.current.delete(fn);
   }, []);

@@ -24,3 +24,6 @@ next-env.d.ts
 
 # copy-paste setup/update scripts (generated, large)
 /twogether-share/
+
+# copy-paste update manifest
+/.twogether-files.json

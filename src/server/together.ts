@@ -12,8 +12,8 @@ interface DateRow {
   created_by: number;
 }
 
-export function listDates(coupleId: number): SpecialDate[] {
-  return all<DateRow>("SELECT * FROM special_dates WHERE couple_id = ? ORDER BY date", coupleId).map((r) => ({
+export async function listDates(coupleId: number): Promise<SpecialDate[]> {
+  return (await all<DateRow>("SELECT * FROM special_dates WHERE couple_id = ? ORDER BY date", coupleId)).map((r) => ({
     id: r.id,
     title: r.title,
     date: r.date,
@@ -32,11 +32,11 @@ interface BucketRow {
   created_at: number;
 }
 
-export function listBucket(coupleId: number): BucketItem[] {
-  return all<BucketRow>(
+export async function listBucket(coupleId: number): Promise<BucketItem[]> {
+  return (await all<BucketRow>(
     "SELECT * FROM bucket_items WHERE couple_id = ? ORDER BY done_at IS NOT NULL, COALESCE(done_at, 0) DESC, id DESC",
     coupleId,
-  ).map((r) => ({
+  )).map((r) => ({
     id: r.id,
     title: r.title,
     doneAt: r.done_at,
@@ -49,8 +49,8 @@ export function listBucket(coupleId: number): BucketItem[] {
 /** Today's date (UTC) as YYYY-MM-DD; both partners share the same question even across time zones. */
 export const today = () => new Date().toISOString().slice(0, 10);
 
-export function dailyQuestion(coupleId: number, userId: number, day = today()): DailyQuestion {
-  const answers = all<{ user_id: number; answer: string }>(
+export async function dailyQuestion(coupleId: number, userId: number, day = today()): Promise<DailyQuestion> {
+  const answers = await all<{ user_id: number; answer: string }>(
     "SELECT user_id, answer FROM daily_answers WHERE couple_id = ? AND day = ?",
     coupleId,
     day,
@@ -67,11 +67,11 @@ export function dailyQuestion(coupleId: number, userId: number, day = today()): 
 }
 
 /** How many days in a row (ending today or yesterday) both partners answered. */
-export function questionStreak(coupleId: number) {
-  const days = all<{ day: string }>(
+export async function questionStreak(coupleId: number) {
+  const days = (await all<{ day: string }>(
     "SELECT day FROM daily_answers WHERE couple_id = ? GROUP BY day HAVING COUNT(*) = 2 ORDER BY day DESC LIMIT 400",
     coupleId,
-  ).map((r) => r.day);
+  )).map((r) => r.day);
   let streak = 0;
   const cursor = new Date(today() + "T00:00:00Z");
   if (days[0] !== today()) cursor.setUTCDate(cursor.getUTCDate() - 1);
@@ -83,11 +83,11 @@ export function questionStreak(coupleId: number) {
   return streak;
 }
 
-export function answeredCount(coupleId: number) {
+export async function answeredCount(coupleId: number) {
   return (
-    one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM (SELECT day FROM daily_answers WHERE couple_id = ? GROUP BY day HAVING COUNT(*) = 2)",
+    (await one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM (SELECT day FROM daily_answers WHERE couple_id = ? GROUP BY day HAVING COUNT(*) = 2) AS done",
       coupleId,
-    )?.n ?? 0
+    ))?.n ?? 0
   );
 }

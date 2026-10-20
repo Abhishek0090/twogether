@@ -1,67 +1,52 @@
+import { randomBytes } from "node:crypto";
 import type { ServerEvent } from "@/lib/types";
+import { all, one } from "./db";
+import { broadcast } from "./supabase";
 
-/** Minimal view of a `ws` socket, so route handlers do not need to import `ws`. */
-export interface SocketLike {
-  readyState: number;
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
+/**
+ * Realtime delivery through Supabase Realtime (Broadcast).
+ *
+ * Every user listens on their own channel `u:<users.channel_key>`. The key is a long random secret that only
+ * that user's browser receives (in the page data after sign-in), so nobody else can subscribe to it.
+ * Partners also share `c:<couples.channel_key>` for typing, calls and presence (sent browser to browser).
+ */
+export const USER_EVENT = "event";
+
+export const newChannelKey = () => randomBytes(24).toString("base64url");
+
+export const userTopic = (channelKey: string) => `u:${channelKey}`;
+export const coupleTopic = (channelKey: string) => `c:${channelKey}`;
+
+/** Sends one event to every open tab and device of each user. */
+export async function sendToUsers(userIds: number[], event: ServerEvent) {
+  if (!userIds.length) return;
+  const rows = await all<{ channel_key: string }>(
+    `SELECT channel_key FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`,
+    ...userIds,
+  );
+  await broadcast(rows.map((r) => ({ topic: userTopic(r.channel_key), event: USER_EVENT, payload: event })));
 }
 
-export interface Connection {
-  socket: SocketLike;
-  userId: number;
-  coupleId: number | null;
-  visible: boolean;
+export async function sendToUser(userId: number, event: ServerEvent) {
+  await sendToUsers([userId], event);
 }
 
-interface Hub {
-  connections: Set<Connection>;
+/** Sends a different event to each user in one request (e.g. each partner's own view of a message). */
+export async function sendEach(items: { userId: number; event: ServerEvent }[]) {
+  if (!items.length) return;
+  const ids = [...new Set(items.map((i) => i.userId))];
+  const rows = await all<{ id: number; channel_key: string }>(
+    `SELECT id, channel_key FROM users WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ...ids,
+  );
+  const keyOf = new Map(rows.map((r) => [r.id, r.channel_key]));
+  await broadcast(
+    items.filter((i) => keyOf.has(i.userId)).map((i) => ({ topic: userTopic(keyOf.get(i.userId)!), event: USER_EVENT, payload: i.event })),
+  );
 }
 
-// Shared between the custom server (owns the sockets) and the route handlers (publish events).
-const g = globalThis as unknown as { __twogetherHub?: Hub };
-const hub = (g.__twogetherHub ??= { connections: new Set() });
-
-const OPEN = 1;
-
-export function addConnection(conn: Connection) {
-  hub.connections.add(conn);
-}
-
-export function removeConnection(conn: Connection) {
-  hub.connections.delete(conn);
-}
-
-export function connectionsOf(userId: number) {
-  return [...hub.connections].filter((c) => c.userId === userId && c.socket.readyState === OPEN);
-}
-
-/** Has at least one open socket (app open in some tab, maybe in the background). */
-export function isOnline(userId: number) {
-  return connectionsOf(userId).length > 0;
-}
-
-/** Has the app open and visible on screen right now. */
-export function isActive(userId: number) {
-  return connectionsOf(userId).some((c) => c.visible);
-}
-
-export function sendToUser(userId: number, event: ServerEvent, except?: Connection) {
-  const payload = JSON.stringify(event);
-  let sent = 0;
-  for (const conn of connectionsOf(userId)) {
-    if (conn === except) continue;
-    conn.socket.send(payload);
-    sent++;
-  }
-  return sent;
-}
-
-export function sendToUsers(userIds: number[], event: ServerEvent) {
-  for (const id of userIds) sendToUser(id, event);
-}
-
-/** Keeps open sockets in step after pairing or unpairing. */
-export function updateCoupleOf(userId: number, coupleId: number | null) {
-  for (const conn of connectionsOf(userId)) conn.coupleId = coupleId;
+/** The app is on screen right now (the browser sends a heartbeat every 25 s while visible). */
+export async function isActive(userId: number) {
+  const row = await one<{ active_until: number }>("SELECT active_until FROM users WHERE id = ?", userId);
+  return !!row && row.active_until > Date.now();
 }

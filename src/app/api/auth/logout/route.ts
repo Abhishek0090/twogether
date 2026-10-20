@@ -5,7 +5,7 @@ import { handler } from "@/server/api";
 export const POST = handler(async () => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  if (token) deleteSession(token);
+  if (token) await deleteSession(token);
   store.delete(SESSION_COOKIE);
   return Response.json({ ok: true });
 });

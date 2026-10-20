@@ -1,192 +1,117 @@
-import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import postgres from "postgres";
 
-const defaultDataDir = process.env.VERCEL
-  ? join(tmpdir(), "twogether")
-  : join(process.cwd(), "data");
-export const DATA_DIR = resolve(process.env.DATA_DIR ?? defaultDataDir);
-export const UPLOAD_DIR = join(DATA_DIR, "uploads");
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS couples (
-  id INTEGER PRIMARY KEY,
-  invite_code TEXT UNIQUE,
-  anniversary TEXT,
-  wallpaper TEXT NOT NULL DEFAULT 'blush',
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  name TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  avatar_media_id INTEGER,
-  partner_nickname TEXT,
-  mood_emoji TEXT,
-  mood_text TEXT,
-  mood_at INTEGER,
-  couple_id INTEGER REFERENCES couples(id) ON DELETE SET NULL,
-  last_seen INTEGER,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS media (
-  id INTEGER PRIMARY KEY,
-  uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  file TEXT NOT NULL,
-  mime TEXT NOT NULL,
-  name TEXT,
-  size INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY,
-  couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
-  sender_id INTEGER NOT NULL,
-  client_id TEXT,
-  type TEXT NOT NULL,
-  body TEXT,
-  media_id INTEGER REFERENCES media(id) ON DELETE SET NULL,
-  meta TEXT,
-  reply_to INTEGER,
-  view_once INTEGER NOT NULL DEFAULT 0,
-  viewed_at INTEGER,
-  edited_at INTEGER,
-  deleted_at INTEGER,
-  created_at INTEGER NOT NULL,
-  delivered_at INTEGER,
-  read_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_messages_couple ON messages(couple_id, id);
-CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(media_id);
-
-CREATE TABLE IF NOT EXISTS message_hidden (
-  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL,
-  PRIMARY KEY (message_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS reactions (
-  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL,
-  emoji TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (message_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS stars (
-  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (message_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS special_dates (
-  id INTEGER PRIMARY KEY,
-  couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  date TEXT NOT NULL,
-  emoji TEXT NOT NULL,
-  yearly INTEGER NOT NULL DEFAULT 1,
-  created_by INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS bucket_items (
-  id INTEGER PRIMARY KEY,
-  couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  done_at INTEGER,
-  done_by INTEGER,
-  created_by INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS daily_answers (
-  couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
-  day TEXT NOT NULL,
-  user_id INTEGER NOT NULL,
-  answer TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (couple_id, day, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-  endpoint TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS kv (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-`;
-
-function open() {
-  mkdirSync(UPLOAD_DIR, { recursive: true });
-  const db = new DatabaseSync(join(DATA_DIR, "twogether.db"));
-  db.exec(
-    "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
-  );
-  db.exec(SCHEMA);
-  return db;
-}
-
-// The custom server (run by tsx) and the Next.js route handlers load this module separately,
-// so the connection lives on globalThis to keep one per process.
-const g = globalThis as unknown as { __twogetherDb?: DatabaseSync };
-export const db = (g.__twogetherDb ??= open());
-
-type Params = SQLInputValue[];
-
-export function one<T>(sql: string, ...params: Params): T | undefined {
-  return db.prepare(sql).get(...params) as T | undefined;
-}
-
-export function all<T>(sql: string, ...params: Params): T[] {
-  return db.prepare(sql).all(...params) as T[];
-}
-
-export function run(sql: string, ...params: Params) {
-  const r = db.prepare(sql).run(...params);
-  return { changes: Number(r.changes), id: Number(r.lastInsertRowid) };
-}
-
-export function tx<T>(fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = fn();
-    db.exec("COMMIT");
-    return result;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+/**
+ * Postgres connection (Supabase). Use the "Transaction pooler" connection string (port 6543):
+ * serverless functions open many short connections and the pooler shares a few real ones.
+ */
+function getDatabaseUrl() {
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set. Copy .env.example to .env.local and fill it in (see docs/14-deployment.md).",
+    );
   }
+
+  const isSupabasePoolerUrl =
+    /^postgres(?:ql)?:\/\/[^\s@]+:[^\s@]+@[^\s/]+:\d+\/[\w-]+(?:\?.*)?$/i.test(
+      url,
+    );
+  if (!isSupabasePoolerUrl) {
+    throw new Error(
+      "DATABASE_URL is not a valid Supabase Postgres connection string. Use the Transaction pooler URL from Supabase > Connect > Transaction pooler (port 6543), not the project URL or a missing hostname.",
+    );
+  }
+
+  return url;
 }
 
-export function kvGet(key: string) {
-  return one<{ value: string }>("SELECT value FROM kv WHERE key = ?", key)
-    ?.value;
+function connect() {
+  const url = getDatabaseUrl();
+  return postgres(url, {
+    prepare: false, // required by the transaction pooler
+    max: Number(process.env.DATABASE_POOL_MAX) || 3, // connections per server instance
+    idle_timeout: 20,
+    connect_timeout: 15,
+    onnotice: () => {},
+    // BIGINT (timestamps, COUNT) arrives as a string by default; our numbers fit safely in a JS number.
+    types: {
+      bigint: {
+        to: 20,
+        from: [20],
+        serialize: (v: number) => String(v),
+        parse: (v: string) => Number(v),
+      },
+    },
+  });
 }
 
-export function kvSet(key: string, value: string) {
-  run(
-    "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+type Sql = ReturnType<typeof connect>;
+type Param = string | number | boolean | null;
+
+// One pool per server instance. Kept on globalThis so hot reload in dev does not open new pools.
+const g = globalThis as unknown as { __twogetherSql?: Sql };
+const sql = () => (g.__twogetherSql ??= connect());
+
+/** Our SQL uses `?` placeholders (easy to read); Postgres wants $1, $2, ... */
+function toPg(query: string) {
+  let n = 0;
+  return query.replace(/\?/g, () => `$${++n}`);
+}
+
+/** Query helpers bound to a connection: the pool, or a transaction. */
+function helpers(conn: { unsafe: Sql["unsafe"] }) {
+  const exec = (query: string, params: Param[]) =>
+    conn.unsafe(toPg(query), params as never[]);
+  return {
+    /** First row, or undefined. */
+    async one<T>(query: string, ...params: Param[]): Promise<T | undefined> {
+      return (await exec(query, params))[0] as T | undefined;
+    },
+    /** All rows. */
+    async all<T>(query: string, ...params: Param[]): Promise<T[]> {
+      return (await exec(query, params)) as unknown as T[];
+    },
+    /** UPDATE / DELETE / INSERT without a result. Returns the number of affected rows. */
+    async run(query: string, ...params: Param[]) {
+      return { changes: (await exec(query, params)).count };
+    },
+    /** INSERT INTO a table with an `id` column; returns the new id. */
+    async insert(query: string, ...params: Param[]) {
+      const rows = await exec(`${query} RETURNING id`, params);
+      return Number((rows[0] as unknown as { id: number }).id);
+    },
+  };
+}
+
+export type Db = ReturnType<typeof helpers>;
+
+const pool: Db = {
+  one: (q, ...p) => helpers(sql()).one(q, ...p),
+  all: (q, ...p) => helpers(sql()).all(q, ...p),
+  run: (q, ...p) => helpers(sql()).run(q, ...p),
+  insert: (q, ...p) => helpers(sql()).insert(q, ...p),
+};
+
+export const { one, all, run, insert } = pool;
+
+/** Runs `fn` in a transaction: everything commits together, or nothing does. */
+export async function tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  return (await sql().begin((t) => fn(helpers(t)))) as T;
+}
+
+export async function kvGet(key: string) {
+  return (
+    await one<{ value: string }>("SELECT value FROM kv WHERE key = ?", key)
+  )?.value;
+}
+
+export async function kvSet(key: string, value: string) {
+  await run(
+    "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     key,
     value,
   );
 }
+
+/** Raw access for scripts (schema setup). */
+export const rawSql = sql;

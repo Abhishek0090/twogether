@@ -6,6 +6,7 @@ import { useApp } from "@/components/app/AppProvider";
 import { useCall } from "@/components/call/CallProvider";
 import { Avatar } from "@/components/ui/Avatar";
 import { Spinner } from "@/components/ui/Spinner";
+import { api } from "@/lib/client/api";
 import { dayLabel, isSameDay } from "@/lib/format";
 import type { Message } from "@/lib/types";
 import { wallpaperById } from "@/lib/wallpapers";
@@ -186,8 +187,10 @@ export function ChatView() {
       },
       onOpenViewOnce: async (m) => {
         try {
-          const res = await fetch(`/api/messages/${m.id}/open`, { cache: "no-store" });
-          if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't open");
+          // The server marks it opened and returns a 60-second link; keep the file only in memory.
+          const { url: link } = await api<{ url: string }>(`/api/messages/${m.id}/open`, { method: "POST" });
+          const res = await fetch(link, { cache: "no-store" });
+          if (!res.ok) throw new Error("Couldn't load it. Check your connection.");
           const url = URL.createObjectURL(await res.blob());
           setLightbox({ items: [{ key: m.id, src: url, kind: m.type === "video" ? "video" : "image", from: partnerName, at: m.createdAt }], index: 0, once: url });
         } catch (e) {

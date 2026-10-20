@@ -29,24 +29,31 @@ export interface UploadResult {
   size: number;
 }
 
-/** Uploads a file with progress (0-1). Uses XHR because fetch has no upload progress. */
-export function uploadFile(file: Blob, name: string, onProgress?: (p: number) => void, signal?: AbortSignal) {
-  return new Promise<UploadResult>((resolve, reject) => {
+/**
+ * Uploads a file in two steps: ask our API for a one-time Storage link, then PUT the file straight to
+ * Supabase Storage. Reports progress (0-1); XHR is used because fetch has no upload progress.
+ */
+export async function uploadFile(file: Blob, name: string, onProgress?: (p: number) => void, signal?: AbortSignal) {
+  const target = await api<UploadResult & { uploadUrl: string }>("/api/media", {
+    json: { name, mime: file.type || "application/octet-stream", size: file.size },
+    signal,
+  });
+  await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/media");
-    xhr.responseType = "json";
+    xhr.open("PUT", target.uploadUrl);
+    // The server may have replaced risky types with application/octet-stream; store what it decided.
+    xhr.setRequestHeader("Content-Type", target.mime);
+    xhr.setRequestHeader("x-upsert", "false");
+    xhr.setRequestHeader("cache-control", "max-age=31536000");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response as UploadResult);
-      else reject(new Error((xhr.response as { error?: string } | null)?.error ?? "Upload failed."));
-    };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status}).`)));
     xhr.onerror = () => reject(new Error("Upload failed. Check your connection."));
     xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
     signal?.addEventListener("abort", () => xhr.abort());
-    const form = new FormData();
-    form.append("file", file, name);
-    xhr.send(form);
+    xhr.send(file);
   });
+  const { id, url, mime, size } = target;
+  return { id, url, mime, name: target.name, size } satisfies UploadResult;
 }
 
 /** Shrinks big photos before upload (max 2048 px, JPEG) and reports their size. GIFs are left alone. */
