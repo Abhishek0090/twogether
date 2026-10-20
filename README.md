@@ -45,6 +45,8 @@ npm run db:setup               # tables + private storage bucket
 npm run dev                    # http://localhost:3000
 ```
 
+Important: `SUPABASE_SERVICE_ROLE_KEY` is server-only. Keep it out of any `NEXT_PUBLIC_` variable. Only the browser-safe `NEXT_PUBLIC_SUPABASE_URL` and the public key should be exposed in the frontend.
+
 Open the app in two browsers (one normal, one private window), create two accounts, get an invite code on one and enter it on the other.
 
 ## Deploy
@@ -64,12 +66,12 @@ Details: [`docs/01-big-picture.md`](docs/01-big-picture.md).
 
 ## Scripts
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Development server (webpack; see docs/02 for why) |
-| `npm run dev:turbo` | Development server with Turbopack |
-| `npm run build` / `npm start` | Production build and server |
-| `npm run lint` / `npm run typecheck` | ESLint and TypeScript checks |
-| `npm run db:setup` | Create or update the Supabase tables and storage bucket |
-| `npm run share` | Rebuild the copy-paste setup / update scripts in `twogether-share/` |
-| `node scripts/make-icons.mjs` | Redraw the PNG app icons |
+| Command                              | What it does                                                        |
+| ------------------------------------ | ------------------------------------------------------------------- |
+| `npm run dev`                        | Development server (webpack; see docs/02 for why)                   |
+| `npm run dev:turbo`                  | Development server with Turbopack                                   |
+| `npm run build` / `npm start`        | Production build and server                                         |
+| `npm run lint` / `npm run typecheck` | ESLint and TypeScript checks                                        |
+| `npm run db:setup`                   | Create or update the Supabase tables and storage bucket             |
+| `npm run share`                      | Rebuild the copy-paste setup / update scripts in `twogether-share/` |
+| `node scripts/make-icons.mjs`        | Redraw the PNG app icons                                            |

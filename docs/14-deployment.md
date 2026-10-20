@@ -2,10 +2,10 @@
 
 Twogether runs on two free services:
 
-| Service | Provides | Free plan, as of October 2026 (check their pricing pages) |
-| --- | --- | --- |
-| **Vercel** (Hobby) | Hosts the Next.js app: pages, API routes, https, global CDN | Non-commercial use only. Generous request and bandwidth limits for two people. |
-| **Supabase** (Free) | Postgres database, file storage, Realtime (live events) | 500 MB database, about 1 GB files, 50 MB per file, 200 live connections. **A project pauses after 7 days with no activity** (data is kept; press Restore in the dashboard). Daily use keeps it awake. |
+| Service             | Provides                                                    | Free plan, as of October 2026 (check their pricing pages)                                                                                                                                             |
+| ------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vercel** (Hobby)  | Hosts the Next.js app: pages, API routes, https, global CDN | Non-commercial use only. Generous request and bandwidth limits for two people.                                                                                                                        |
+| **Supabase** (Free) | Postgres database, file storage, Realtime (live events)     | 500 MB database, about 1 GB files, 50 MB per file, 200 live connections. **A project pauses after 7 days with no activity** (data is kept; press Restore in the dashboard). Daily use keeps it awake. |
 
 You need: a GitHub account, a Vercel account and a Supabase account. All three have free sign-up with GitHub.
 
@@ -81,13 +81,13 @@ git push -u origin main
 
 Create `.env.local` in the project folder (copy `.env.example`) and fill in:
 
-| Variable | Where in Supabase |
-| --- | --- |
-| `DATABASE_URL` | Top bar **Connect**, then **Transaction pooler** (port **6543**). Replace `[YOUR-PASSWORD]` with the database password. |
-| `SUPABASE_URL` | **Project Settings > API** (or **Data API**): Project URL, e.g. `https://abcd.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Project Settings > API Keys**: the **secret** key (`sb_secret_...`) or the legacy `service_role` key. **Server only, never share it.** |
-| `NEXT_PUBLIC_SUPABASE_URL` | Same as `SUPABASE_URL` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **API Keys**: the **publishable** key (`sb_publishable_...`) or the legacy `anon` key. Safe in the browser. |
+| Variable                                                                    | Where in Supabase                                                                                                                                                                           |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                              | Top bar **Connect**, then **Transaction pooler** (port **6543**). Replace `[YOUR-PASSWORD]` with the database password.                                                                     |
+| `SUPABASE_URL`                                                              | **Project Settings > API** (or **Data API**): Project URL, e.g. `https://abcd.supabase.co`                                                                                                  |
+| `SUPABASE_SERVICE_ROLE_KEY`                                                 | **Project Settings > API Keys**: the **secret** key (`sb_secret_...`) or the legacy `service_role` key. **Server only, never share it.** Do not copy this into any `NEXT_PUBLIC_` variable. |
+| `NEXT_PUBLIC_SUPABASE_URL`                                                  | Same as `SUPABASE_URL`                                                                                                                                                                      |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or `NEXT_PUBLIC_SUPABASE_ANON_KEY`) | **API Keys**: the **public** key (`sb_publishable_...` or the legacy `anon` key). Safe in the browser.                                                                                      |
 
 Use the **Transaction pooler** string, not the "Direct connection". Serverless functions open many short connections; the pooler shares a few real ones between them.
 
@@ -116,7 +116,7 @@ Open `http://localhost:3000` in a normal and a private window, create two accoun
 
 1. vercel.com, **Add New > Project**, import the GitHub repository.
 2. Framework: Next.js (detected). Leave the build settings alone.
-3. **Environment Variables:** add the same five names and values as `.env.local` (plus `VAPID_SUBJECT=mailto:you@example.com`).
+3. **Environment Variables:** add the same five names and values as `.env.local` (plus `VAPID_SUBJECT=mailto:you@example.com`). Use the secret Supabase key only for `SUPABASE_SERVICE_ROLE_KEY`; keep it off all `NEXT_PUBLIC_` variables or Vercel will report a visibility/security issue.
 4. **Deploy.** The first build takes 1-2 minutes.
 
 Alternative for steps 3 and 6: Vercel's **Supabase integration** (Vercel Marketplace) can create the project and fill the variables for you. The app also reads `POSTGRES_URL` and `SUPABASE_SECRET_KEY` if that is what the integration provides. Still run `npm run db:setup` once with those values.
@@ -158,16 +158,16 @@ If you change `supabase/schema.sql`, run `npm run db:setup` again (new tables ar
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| 500 on every page | Missing or wrong environment variable | Vercel: **Deployments > (latest) > Runtime Logs** shows which. Fix it in Settings, then Redeploy. |
-| `DATABASE_URL is not set` | Variable missing on Vercel | Add it for the **Production** environment and redeploy |
-| `password authentication failed` | Wrong database password in the URL | Reset it in Supabase **Database settings**, update the URL |
-| `prepared statement ... already exists` | Using the session pooler or an old driver setting | Use the **Transaction pooler** URL (port 6543) |
-| Header stays "connecting..." | `NEXT_PUBLIC_SUPABASE_*` wrong, Realtime off, or project paused | Check values, enable Realtime, restore the project. The app still works by fetching new messages every 10 s. |
-| Upload fails | Bucket missing, or file over 50 MB | Run `npm run db:setup`; send smaller files |
-| Everything slow | Function region far from the database | Step 7 |
-| Site down after a quiet week | Supabase project paused | Supabase dashboard, **Restore project** |
+| Symptom                                 | Likely cause                                                    | Fix                                                                                                          |
+| --------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 500 on every page                       | Missing or wrong environment variable                           | Vercel: **Deployments > (latest) > Runtime Logs** shows which. Fix it in Settings, then Redeploy.            |
+| `DATABASE_URL is not set`               | Variable missing on Vercel                                      | Add it for the **Production** environment and redeploy                                                       |
+| `password authentication failed`        | Wrong database password in the URL                              | Reset it in Supabase **Database settings**, update the URL                                                   |
+| `prepared statement ... already exists` | Using the session pooler or an old driver setting               | Use the **Transaction pooler** URL (port 6543)                                                               |
+| Header stays "connecting..."            | `NEXT_PUBLIC_SUPABASE_*` wrong, Realtime off, or project paused | Check values, enable Realtime, restore the project. The app still works by fetching new messages every 10 s. |
+| Upload fails                            | Bucket missing, or file over 50 MB                              | Run `npm run db:setup`; send smaller files                                                                   |
+| Everything slow                         | Function region far from the database                           | Step 7                                                                                                       |
+| Site down after a quiet week            | Supabase project paused                                         | Supabase dashboard, **Restore project**                                                                      |
 
 ## Self-hosting instead
 

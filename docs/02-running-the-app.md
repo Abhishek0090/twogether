@@ -16,17 +16,17 @@ npm run dev                     # http://localhost:3000
 
 ## Scripts
 
-| Command | Runs | When to use |
-| --- | --- | --- |
-| `npm run dev` | `next dev --webpack` | Daily development, hot reload |
-| `npm run dev:turbo` | `next dev` (Turbopack) | Faster dev builds, **if** the Console Ninja extension is not active (see below) |
-| `npm run dev:lan` | `next dev --webpack -H 0.0.0.0` | Open the dev server from a phone on the same Wi-Fi |
-| `npm run build` | `next build` | Production build (Vercel runs this) |
-| `npm start` | `next start` | Run the production build locally |
-| `npm run lint` | `eslint` | Must pass with 0 errors |
-| `npm run typecheck` | `tsc --noEmit` | TypeScript errors only |
-| `npm run db:setup` | `node scripts/db-setup.mjs` | Create or update tables and the bucket |
-| `npm run share` | `node scripts/make-share.mjs` | Rebuild the copy-paste setup/update scripts |
+| Command             | Runs                            | When to use                                                                     |
+| ------------------- | ------------------------------- | ------------------------------------------------------------------------------- |
+| `npm run dev`       | `next dev --webpack`            | Daily development, hot reload                                                   |
+| `npm run dev:turbo` | `next dev` (Turbopack)          | Faster dev builds, **if** the Console Ninja extension is not active (see below) |
+| `npm run dev:lan`   | `next dev --webpack -H 0.0.0.0` | Open the dev server from a phone on the same Wi-Fi                              |
+| `npm run build`     | `next build`                    | Production build (Vercel runs this)                                             |
+| `npm start`         | `next start`                    | Run the production build locally                                                |
+| `npm run lint`      | `eslint`                        | Must pass with 0 errors                                                         |
+| `npm run typecheck` | `tsc --noEmit`                  | TypeScript errors only                                                          |
+| `npm run db:setup`  | `node scripts/db-setup.mjs`     | Create or update tables and the bucket                                          |
+| `npm run share`     | `node scripts/make-share.mjs`   | Rebuild the copy-paste setup/update scripts                                     |
 
 Run lint and typecheck before you consider a change done.
 
@@ -40,20 +40,20 @@ If you do not use Console Ninja (or pause it for this workspace), `npm run dev:t
 
 Local: `.env.local` (git-ignored). Vercel: Project, Settings, Environment Variables. Same names in both places.
 
-| Variable | Required | Used in |
-| --- | --- | --- |
-| `DATABASE_URL` | yes | `src/server/db.ts`: Supabase **Transaction pooler** string (port 6543). `POSTGRES_URL` also works. |
-| `SUPABASE_URL` | yes | `src/server/supabase.ts`: storage links, realtime broadcast |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes | Same. Secret: server only. `SUPABASE_SECRET_KEY` also works. |
-| `NEXT_PUBLIC_SUPABASE_URL` | yes | `src/lib/client/supabase.ts`: Realtime in the browser |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Same. Public key. `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` also works. |
-| `VAPID_SUBJECT` | no | `src/server/push.ts`: contact for push services |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | no | Fixed push keys; otherwise generated once and stored in `kv` |
-| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | no | `src/app/api/rtc/route.ts`: relay server for calls |
-| `DATABASE_POOL_MAX` | no | Connections per server instance (default 3) |
-| `ALLOWED_DEV_ORIGINS` | no | `next.config.ts`: extra hostnames for the dev server |
+| Variable                                                                  | Required | Used in                                                                                                       |
+| ------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                            | yes      | `src/server/db.ts`: Supabase **Transaction pooler** string (port 6543). `POSTGRES_URL` also works.            |
+| `SUPABASE_URL`                                                            | yes      | `src/server/supabase.ts`: storage links, realtime broadcast                                                   |
+| `SUPABASE_SERVICE_ROLE_KEY`                                               | yes      | Same. **Secret**: server only. `SUPABASE_SECRET_KEY` also works. Never expose this as a `NEXT_PUBLIC_` value. |
+| `NEXT_PUBLIC_SUPABASE_URL`                                                | yes      | `src/lib/client/supabase.ts`: Realtime in the browser                                                         |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes      | Public browser key only. **Never** put `SUPABASE_SERVICE_ROLE_KEY` here.                                      |
+| `VAPID_SUBJECT`                                                           | no       | `src/server/push.ts`: contact for push services                                                               |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`                                   | no       | Fixed push keys; otherwise generated once and stored in `kv`                                                  |
+| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`                            | no       | `src/app/api/rtc/route.ts`: relay server for calls                                                            |
+| `DATABASE_POOL_MAX`                                                       | no       | Connections per server instance (default 3)                                                                   |
+| `ALLOWED_DEV_ORIGINS`                                                     | no       | `next.config.ts`: extra hostnames for the dev server                                                          |
 
-`NEXT_PUBLIC_` values are baked into the browser bundle at build time. After changing them on Vercel, **redeploy**.
+`NEXT_PUBLIC_` values are baked into the browser bundle at build time. After changing them on Vercel, **redeploy**. The service-role key is intentionally not a public value and should never be configured as `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY` or any other `NEXT_PUBLIC_` variable; Vercel will warn because that exposes a server secret to the browser.
 
 ### Separate dev and production data (optional)
 
